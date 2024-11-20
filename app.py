@@ -4,9 +4,6 @@ import cv2
 import numpy as np
 import time
 from PIL import Image
-import av
-from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
-import threading
 import queue
 import json
 
@@ -122,70 +119,59 @@ class StreamlitBlindAssistant:
         
         return frame, detections
 
-    def callback(self, frame):
-        """Callback for WebRTC video processing"""
-        img = frame.to_ndarray(format="bgr24")
-        processed_frame, detections = self.process_frame(img)
+    def process_uploaded_image(self, image):
+        """Process uploaded images instead of video stream"""
+        if isinstance(image, str):
+            frame = cv2.imread(image)
+        else:
+            # Convert PIL Image to OpenCV format
+            frame = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
         
-        # Add detections to queue for the Streamlit app to process
-        self.detection_queue.put(detections)
+        processed_frame, detections = self.process_frame(frame)
         
-        return av.VideoFrame.from_ndarray(processed_frame, format="bgr24")
+        # Convert back to PIL Image for Streamlit
+        processed_image = Image.fromarray(cv2.cvtColor(processed_frame, cv2.COLOR_BGR2RGB))
+        return processed_image, detections
 
 def main():
     st.set_page_config(page_title="AudioNav Assistance", layout="wide")
     
     st.title("AudioNav Assistance - Web Version")
     st.markdown("""
-    This web application provides real-time object detection and assistance for the visually impaired.
-    Use your device's camera to detect objects in your surroundings.
+    This web application provides object detection and assistance for the visually impaired.
+    Upload images to detect objects in your surroundings.
     """)
     
     # Initialize the assistant if not already done
     if 'assistant' not in st.session_state:
         st.session_state['assistant'] = StreamlitBlindAssistant()
     
-    # WebRTC Configuration
-    rtc_configuration = RTCConfiguration(
-        {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
-    )
+    # File uploader
+    uploaded_file = st.file_uploader("Choose an image...", type=['jpg', 'jpeg', 'png'])
     
-    # Create WebRTC streamer
-    webrtc_ctx = webrtc_streamer(
-        key="blind-assistant",
-        mode=WebRtcMode.SENDRECV,
-        rtc_configuration=rtc_configuration,
-        video_processor_factory=lambda: st.session_state['assistant'],
-        async_processing=True,
-    )
-    
-    # Display detections
-    if webrtc_ctx.state.playing:
-        detection_placeholder = st.empty()
+    if uploaded_file is not None:
+        # Display original image
+        image = Image.open(uploaded_file)
+        col1, col2 = st.columns(2)
         
-        while True:
-            try:
-                # Get latest detections from queue
-                detections = st.session_state['assistant'].detection_queue.get_nowait()
-                
-                # Display detections
-                if detections:
-                    detection_text = ""
-                    for det in detections:
-                        detection_text += f"Detected {det['label']} ({det['category']}) at {det['distance']}m\n"
-                    
-                    detection_placeholder.text_area(
-                        "Latest Detections:", 
-                        detection_text,
-                        height=200
-                    )
-            except queue.Empty:
-                continue
-            except Exception as e:
-                st.error(f"Error processing detections: {e}")
-                break
-            
-            time.sleep(0.1)
+        with col1:
+            st.subheader("Original Image")
+            st.image(image, use_column_width=True)
+        
+        # Process image and display results
+        processed_image, detections = st.session_state['assistant'].process_uploaded_image(image)
+        
+        with col2:
+            st.subheader("Processed Image")
+            st.image(processed_image, use_column_width=True)
+        
+        # Display detections
+        if detections:
+            st.subheader("Detected Objects")
+            detection_text = ""
+            for det in detections:
+                detection_text += f"Detected {det['label']} ({det['category']}) at {det['distance']}m\n"
+            st.text_area("Detections:", detection_text, height=200)
 
 if __name__ == "__main__":
     main()
